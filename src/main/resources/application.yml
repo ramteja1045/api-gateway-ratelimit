@@ -1,0 +1,69 @@
+spring:
+  application:
+    name: api-gateway-ratelimit
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
+  cloud:
+    gateway:
+      default-filters:
+        - name: RequestRateLimiter
+          args:
+            redis-rate-limiter.replenishRate: ${RATE_REPLENISH:10}
+            redis-rate-limiter.burstCapacity: ${RATE_BURST:20}
+            redis-rate-limiter.requestedTokens: 1
+            key-resolver: "#{@userKeyResolver}"
+        - DedupeResponseHeader=Access-Control-Allow-Origin
+      routes:
+        - id: orders
+          uri: ${ORDERS_URI:http://localhost:8081}
+          predicates:
+            - Path=/api/orders/**
+          filters:
+            - name: CircuitBreaker
+              args:
+                name: orders
+                fallbackUri: forward:/fallback/orders
+            - name: Retry
+              args:
+                retries: 2
+                methods: GET
+                statuses: BAD_GATEWAY,SERVICE_UNAVAILABLE
+                backoff:
+                  firstBackoff: 100ms
+                  maxBackoff: 1s
+                  factor: 2
+        - id: ledger
+          uri: ${LEDGER_URI:http://localhost:8082}
+          predicates:
+            - Path=/api/accounts/**,/api/transfers/**
+          filters:
+            - name: CircuitBreaker
+              args:
+                name: ledger
+                fallbackUri: forward:/fallback/ledger
+
+resilience4j:
+  circuitbreaker:
+    configs:
+      default:
+        sliding-window-size: 20
+        failure-rate-threshold: 50
+        wait-duration-in-open-state: 10s
+        permitted-number-of-calls-in-half-open-state: 3
+  timelimiter:
+    configs:
+      default:
+        timeout-duration: 3s
+
+gateway:
+  jwt:
+    secret: ${JWT_SECRET:change-me-local-dev-secret-at-least-32-bytes}
+  dev-tokens: ${DEV_TOKENS:true}
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics,gateway
